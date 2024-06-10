@@ -1,13 +1,15 @@
 import { Suspense, useMemo, useState } from "react"
-import { useRecoilCallback, useRecoilValue } from "recoil"
-import { pocketPathAtom } from "../../../recoil/atoms"
+import {
+  useRecoilCallback,
+  useRecoilValue,
+  useRecoilValueLoadable,
+} from "recoil"
 import {
   ImagePackImageSelectorFamily,
   imagePackListSelector,
   platformsListSelector,
 } from "../../../recoil/platforms/selectors"
 import { ImagePack, PlatformId } from "../../../types"
-import { invokeSaveFile } from "../../../utils/invokes"
 import { PlatformImage } from "../../cores/platformImage"
 import { Link } from "../../link"
 import { Loader } from "../../loader"
@@ -16,6 +18,8 @@ import { useTranslation } from "react-i18next"
 
 import "./index.css"
 import { PlatformName } from "./platformName"
+import { OnlyLoadsWhenShown } from "../../../utils/onlyLoadsWhenShown"
+import { invokeSaveMultipleFiles } from "../../../utils/invokes"
 
 type ImagePacksProps = {
   onClose: () => void
@@ -29,7 +33,13 @@ export const ImagePacks = ({ onClose, singlePlatformId }: ImagePacksProps) => {
     return allPlatformIds
   }, [allPlatformIds, singlePlatformId])
 
-  const imagePacks = useRecoilValue(imagePackListSelector)
+  const imagePacksLoadable = useRecoilValueLoadable(imagePackListSelector)
+
+  const imagePacks = useMemo(() => {
+    if (imagePacksLoadable.state !== "hasValue") return []
+    return imagePacksLoadable.contents
+  }, [imagePacksLoadable])
+
   const [selections, setSelections] = useState<
     Record<PlatformId, ImagePack | undefined>
   >({})
@@ -40,8 +50,9 @@ export const ImagePacks = ({ onClose, singlePlatformId }: ImagePacksProps) => {
   const applyChanges = useRecoilCallback(
     ({ snapshot }) =>
       async () => {
-        const pocketPath = await snapshot.getPromise(pocketPathAtom)
-        if (!pocketPath) return
+        const paths = []
+        const images = []
+
         for (const platformId in selections) {
           const pack = selections[platformId]
           if (!pack) continue
@@ -49,12 +60,14 @@ export const ImagePacks = ({ onClose, singlePlatformId }: ImagePacksProps) => {
             ImagePackImageSelectorFamily({ ...pack, platformId })
           )
           if (!image) continue
-          await invokeSaveFile(
-            `${pocketPath}/Platforms/_images/${platformId}.bin`,
-            new Uint8Array(await image.file.arrayBuffer())
-          )
+
+          const imageData = new Uint8Array(await image.file.arrayBuffer())
+
+          paths.push(`Platforms/_images/${platformId}.bin`)
+          images.push(imageData)
         }
 
+        await invokeSaveMultipleFiles(paths, images)
         onClose()
       },
     [selections]
@@ -77,47 +90,59 @@ export const ImagePacks = ({ onClose, singlePlatformId }: ImagePacksProps) => {
               }`}
               onClick={() => setSelections((s) => ({ ...s, [pId]: undefined }))}
             >
-              <PlatformName platformId={pId} />
-              <PlatformImage platformId={pId} className="image-packs__image" />
+              <OnlyLoadsWhenShown height={103}>
+                <Suspense>
+                  <PlatformName platformId={pId} />
+                  <PlatformImage
+                    platformId={pId}
+                    className="image-packs__image"
+                  />
+                </Suspense>
+              </OnlyLoadsWhenShown>
             </div>
           ))}
         </div>
 
         {imagePacks.map((pack) => (
-          <div
-            key={`${pack.owner}-${pack.repository}-${pack.variant}`}
-            className="image-packs__column"
-          >
-            <div className="image-packs__column-name">
-              <Link
-                href={`https://github.com/${pack.owner}/${pack.repository}`}
-              >
-                <b>{pack.owner}</b>
-                <div title={pack.repository}>{pack.repository}</div>
-                {pack.variant && <small>{pack.variant}</small>}
-              </Link>
-            </div>
+          <Suspense key={`${pack.owner}-${pack.repository}-${pack.variant}`}>
+            <div className="image-packs__column">
+              <div className="image-packs__column-name">
+                <Link
+                  href={`https://github.com/${pack.owner}/${pack.repository}`}
+                >
+                  <b>{pack.owner}</b>
+                  <div title={pack.repository}>{pack.repository}</div>
+                  <small title={pack.variant}>{pack.variant}</small>
+                </Link>
+              </div>
 
-            {platformIds.map((pId) => (
-              <Suspense
-                key={`${pId}-${pack.owner}-${pack.repository}-${pack.variant}`}
-                fallback={
-                  <div className="image-packs__item image-packs__item--missing">
-                    <Loader />
-                  </div>
-                }
-              >
-                <PackColumnItem
-                  {...pack}
-                  platformId={pId}
-                  onClick={() => setSelections((s) => ({ ...s, [pId]: pack }))}
-                  isSelected={
-                    JSON.stringify(selections[pId]) === JSON.stringify(pack)
-                  }
-                />
-              </Suspense>
-            ))}
-          </div>
+              {platformIds.map((pId) => (
+                <OnlyLoadsWhenShown
+                  key={`${pId}-${pack.owner}-${pack.repository}-${pack.variant}`}
+                  height={103}
+                >
+                  <Suspense
+                    fallback={
+                      <div className="image-packs__item image-packs__item--missing">
+                        <Loader />
+                      </div>
+                    }
+                  >
+                    <PackColumnItem
+                      {...pack}
+                      platformId={pId}
+                      onClick={() =>
+                        setSelections((s) => ({ ...s, [pId]: pack }))
+                      }
+                      isSelected={
+                        JSON.stringify(selections[pId]) === JSON.stringify(pack)
+                      }
+                    />
+                  </Suspense>
+                </OnlyLoadsWhenShown>
+              ))}
+            </div>
+          </Suspense>
         ))}
       </div>
 
